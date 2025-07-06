@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Каталог катушек</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/ @zxing/library@latest"></script>
+</head>
+<body>
+<h1>Добавить новую катушку</h1>
+<form id="addForm">
+    <label for="material">Материал</label><br>
+    <select id="material">
+        <option value="">-- Выберите материал --</option>
+        <option value="PLA">PLA</option>
+        <option value="ABS">ABS</option>
+        <option value="PETG">PETG</option>
+    </select><br><br>
+    <label for="color">Цвет</label>
+    <input type="text" id="color" placeholder="Введите цвет"><br><br>
+    <label for="manufacturer">Производитель</label>
+    <input type="text" id="manufacturer" placeholder="Введите производителя"><br><br>
+    <label for="initialMass">Начальная масса (г)</label>
+    <input type="text" id="initialMass" placeholder="Введите начальную массу"><br><br>
+    <label for="initialLength">Длина нити (мм)</label>
+    <input type="text" id="initialLength" placeholder="Введите длину нити"><br><br>
+    <button type="button" onclick="addSpool()">Создать катушку</button>
+</form>
+<!-- Кнопка для сканера -->
+<button onclick="openScanner()">Открыть сканер QR-кода</button>
+<h2>Каталог катушек</h2>
+<div id="scanner-container" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.8); z-index: 9999;">
+    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center;">
+        <video id="qr-video" autoplay muted style="max-width: 400px; max-height: 400px; border: 2px solid #fff; border-radius: 8px;"></video>
+        <button onclick="closeScanner()" style="margin-top: 10px; padding: 10px 20px; background: #fff; color: #333; border: none; border-radius: 4px; cursor: pointer;">Закрыть сканер</button>
+    </div>
+</div>
+<table id="spoolTable">
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Материал</th>
+            <th>Цвет</th>
+            <th>Производитель</th>
+            <th>Начальная масса</th>
+            <th>Текущая масса</th>
+            <th>Начальная длина</th>
+            <th>Текущая длина</th>
+            <th>QR-код</th>
+            <th>Действия</th>
+            <th>Всего на складе (г)</th>
+        </tr>
+    </thead>
+    <tbody></tbody>
+</table>
+
+<!-- Модальное окно -->
+<div class="modal" id="editModal">
+    <div class="modal-content">
+        <span class="close" onclick="closeEditModal()">&times;</span>
+        <h3>Израсходованные значения</h3>
+        <label>Масса (г):</label>
+        <input type="number" id="usedMass" min="0" step="0.1"><br><br>
+        <label>Длина (мм):</label>
+        <input type="number" id="usedLength" min="0" step="1"><br><br>
+        <button onclick="saveEditedData()">Сохранить</button>
+    </div>
+</div>
+
+<!-- Модальное окно результата сканирования -->
+<div id="result-modal" style="display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #333; color: white; padding: 20px; border-radius: 8px; z-index: 9999;">
+    <h3>Результат сканирования</h3>
+    <p id="scan-result"></p>
+    <button onclick="closeResultModal()">Закрыть</button>
+</div>
+
+<script src="qrcode.js"></script>
+<script>
+let selectedRow = null;
+let codeReader = null;
+
+function generateRandomId() {
+    return Math.floor(1000 + Math.random() * 9000);
+}
+
+window.onload = function () {
+    const savedData = JSON.parse(localStorage.getItem('spools'));
+    if (savedData) {
+        savedData.forEach(spool => addSpoolToTable(spool));
+    }
+};
+
+function addSpool() {
+    const material = document.getElementById('material').value;
+    const color = document.getElementById('color').value.trim();
+    const manufacturer = document.getElementById('manufacturer').value.trim();
+    const initialMass = parseFloat(document.getElementById('initialMass').value.trim());
+    const initialLength = parseFloat(document.getElementById('initialLength').value.trim());
+
+    if (!material || !color || !manufacturer || isNaN(initialMass) || isNaN(initialLength)) {
+        alert("Пожалуйста, заполните все поля корректно!");
+        return;
+    }
+
+    const newSpool = {
+        id: generateRandomId(),
+        material,
+        color,
+        manufacturer,
+        initialMass,
+        currentMass: initialMass,
+        initialLength,
+        currentLength: initialLength
+    };
+
+    addSpoolToTable(newSpool);
+    saveToLocalStorage();
+
+    document.getElementById('material').value = '';
+    document.getElementById('color').value = '';
+    document.getElementById('manufacturer').value = '';
+    document.getElementById('initialMass').value = '';
+    document.getElementById('initialLength').value = '';
+}
+
+function addSpoolToTable(spool) {
+    const tableBody = document.querySelector('#spoolTable tbody');
+    const newRow = document.createElement('tr');
+
+    newRow.innerHTML = `
+        <td>${spool.id}</td>
+        <td class="material">${spool.material}</td>
+        <td>${spool.color}</td>
+        <td>${spool.manufacturer}</td>
+        <td>${spool.initialMass} г</td>
+        <td class="current-mass">${spool.currentMass} г</td>
+        <td>${spool.initialLength} мм</td>
+        <td class="current-length">${spool.currentLength} мм</td>
+        <td class="qr-code-column"></td>
+        <td class="actions">
+            <button onclick="openEditModal(this)">Редактировать</button>
+            <button onclick="deleteSpool(this)">Удалить</button>
+            <button onclick="downloadQR(this)">СКАЧАТЬ QR</button>
+        </td>
+        <td class="total-by-material"></td>
+    `;
+
+    newRow.dataset.id = spool.id;
+    tableBody.appendChild(newRow);
+
+    // Генерация QR-кода
+    const qrContainer = newRow.querySelector('.qr-code-column');
+    const qrText = `ID: ${spool.id}, Материал: ${spool.material}, Цвет: ${spool.color}, Производитель: ${spool.manufacturer}`;
+    new QRCode(qrContainer, {
+        text: qrText,
+        width: 80,
+        height: 80,
+        colorDark : "#000000",
+        colorLight : "#ffffff",
+        correctLevel : QRCode.CorrectLevel.H
+    });
+
+    updateTotalByMaterial();
+}
+
+function deleteSpool(button) {
+    const row = button.closest('tr');
+    row.remove();
+    saveToLocalStorage();
+    updateTotalByMaterial();
+}
+
+function openEditModal(button) {
+    selectedRow = button.closest('tr');
+    document.getElementById('editModal').style.display = 'block';
+}
+
+function closeEditModal() {
+    document.getElementById('editModal').style.display = 'none';
+    document.getElementById('usedMass').value = '';
+    document.getElementById('usedLength').value = '';
+}
+
+function saveEditedData() {
+    const usedMass = parseFloat(document.getElementById('usedMass').value);
+    const usedLength = parseFloat(document.getElementById('usedLength').value);
+
+    if (isNaN(usedMass) || isNaN(usedLength) || usedMass < 0 || usedLength < 0) {
+        alert("Введите положительные числа!");
+        return;
+    }
+
+    const massCell = selectedRow.querySelector('.current-mass');
+    const lengthCell = selectedRow.querySelector('.current-length');
+
+    const currentMass = parseFloat(massCell.textContent.replace(' г', ''));
+    const currentLength = parseFloat(lengthCell.textContent.replace(' мм', ''));
+
+    const newMass = Math.max(currentMass - usedMass, 0);
+    const newLength = Math.max(currentLength - usedLength, 0);
+
+    massCell.textContent = `${newMass.toFixed(1)} г`;
+    lengthCell.textContent = `${newLength.toFixed(0)} мм`;
+
+    updateLocalStorage(selectedRow.dataset.id, newMass, newLength);
+    updateTotalByMaterial();
+}
+
+function updateLocalStorage(id, newMass, newLength) {
+    const data = JSON.parse(localStorage.getItem('spools')) || [];
+    const itemIndex = data.findIndex(item => item.id == id);
+    if (itemIndex !== -1) {
+        data[itemIndex].currentMass = newMass;
+        data[itemIndex].currentLength = newLength;
+    }
+    localStorage.setItem('spools', JSON.stringify(data));
+}
+
+function saveToLocalStorage() {
+    const rows = document.querySelectorAll('#spoolTable tbody tr');
+    const data = Array.from(rows).map(row => ({
+        id: parseInt(row.dataset.id),
+        material: row.cells[1].textContent,
+        color: row.cells[2].textContent,
+        manufacturer: row.cells[3].textContent,
+        initialMass: parseFloat(row.cells[4].textContent.replace(' г', '')),
+        currentMass: parseFloat(row.cells[5].textContent.replace(' г', '')),
+        initialLength: parseFloat(row.cells[6].textContent.replace(' мм', '')),
+        currentLength: parseFloat(row.cells[7].textContent.replace(' мм', '')),
+    }));
+    localStorage.setItem('spools', JSON.stringify(data));
+}
+
+function downloadQR(button) {
+    const row = button.closest('tr');
+    const qrCanvas = row.querySelector('.qr-code-column canvas');
+    if (!qrCanvas) {
+        alert("QR-код не найден!");
+        return;
+    }
+    const imageUrl = qrCanvas.toDataURL("image/png");
+    const a = document.createElement("a");
+    a.href = imageUrl;
+    a.download = `qrcode_${row.cells[0].textContent}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+// ZXing QR-сканер
+function openScanner() {
+    const scannerContainer = document.getElementById('scanner-container');
+    scannerContainer.style.display = 'block';
+    const videoElement = document.getElementById("qr-video");
+    codeReader = new ZXing.BrowserQRCodeReader();
+    codeReader.decodeFromVideoDevice(undefined, 'qr-video', (result, err) => {
+        if (result) {
+            handleScanResult(result.text);
+        }
+        if (err && !(err instanceof ZXing.NotFoundException)) {
+            console.error(err);
+            alert("Ошибка при запуске камеры: " + err.message);
+        }
+    });
+}
+
+function closeScanner() {
+    const videoElement = document.getElementById("qr-video");
+    if (videoElement.srcObject) {
+        videoElement.srcObject.getTracks().forEach(track => track.stop());
+        videoElement.srcObject = null;
+    }
+    codeReader = null;
+    document.getElementById('scanner-container').style.display = 'none';
+}
+
+function handleScanResult(decodedText) {
+    closeScanner();
+    const spools = JSON.parse(localStorage.getItem('spools')) || [];
+    const spoolId = decodedText.split(',')[0].split(':')[1].trim();
+    const foundSpool = spools.find(spool => spool.id == spoolId);
+
+    if (foundSpool) {
+        const resultModal = document.getElementById('result-modal');
+        resultModal.style.display = 'block';
+        const scanResult = document.getElementById('scan-result');
+        scanResult.innerHTML = `
+            <strong>Катушка найдена:</strong><br>
+            ID: ${foundSpool.id}<br>
+            Материал: ${foundSpool.material}<br>
+            Цвет: ${foundSpool.color}<br>
+            Производитель: ${foundSpool.manufacturer}<br>
+            Начальная масса: ${foundSpool.initialMass} г<br>
+            Текущая масса: ${foundSpool.currentMass} г<br>
+            Начальная длина: ${foundSpool.initialLength} мм<br>
+            Текущая длина: ${foundSpool.currentLength} мм
+        `;
+    } else {
+        const resultModal = document.getElementById('result-modal');
+        resultModal.style.display = 'block';
+        const scanResult = document.getElementById('scan-result');
+        scanResult.textContent = "Катушка не найдена!";
+    }
+}
+
+function closeResultModal() {
+    document.getElementById('result-modal').style.display = 'none';
+}
+
+function updateTotalByMaterial() {
+    const materialTotals = {};
+    document.querySelectorAll('#spoolTable tbody tr').forEach(row => {
+        const material = row.querySelector('.material').textContent;
+        const mass = parseFloat(row.querySelector('.current-mass').textContent.replace(' г', ''));
+        if (!materialTotals[material]) {
+            materialTotals[material] = 0;
+        }
+        materialTotals[material] += mass;
+    });
+
+    document.querySelectorAll('#spoolTable tbody tr').forEach(row => {
+        const material = row.querySelector('.material').textContent;
+        const totalCell = row.querySelector('.total-by-material');
+        totalCell.textContent = `${materialTotals[material].toFixed(1)} г`;
+    });
+}
+</script>
+</body>
+</html>
